@@ -1,4 +1,3 @@
-
 #include <iostream>
 #include <vector>
 #include <utility>
@@ -85,6 +84,26 @@ namespace graph_alg
 	template<class G>
 	class GSGIsomorphismPolicy
 	{
+	public:
+	    typedef typename boost::graph_traits<G>::vertex_descriptor V;
+	    struct First  { static bool test_eq(V v1, V v2) { return true; } };
+	    struct Second { static bool test_eq(V v1, V v2) { return v1 == v2; } };
+
+	    static bool check_term_count(int termout1, int termout2,
+					 int termin1, int termin2,
+					 int new1, int new2)
+		{
+		    return
+			termout1 == termout2 &&
+			termin1 == termin2 &&
+			new1 == new2;
+		}
+
+	    static bool is_goal(int depth, int n1, int n2)
+		{ return depth == n1 && depth == n2; }
+
+	    // used with is_dead()
+	    static bool op(int v1, int v2) { return v1 != v2; }
 	};
 
 
@@ -95,6 +114,10 @@ namespace graph_alg
 	class DirectedPolicy
 	{
 	public:
+	    typedef typename boost::graph_traits<G>::vertex_descriptor VDescr;
+	    typedef typename boost::graph_traits<G>::edge_descriptor EDescr;
+
+
 	    struct Len
 	    {
 		int t_len_out;
@@ -113,9 +136,6 @@ namespace graph_alg
 
 	    class MappingArrays
 	    {
-		typedef typename boost::graph_traits<G>::vertex_descriptor VDescr;
-		typedef typename boost::graph_traits<G>::edge_descriptor EDescr;
-
 		std::vector<EIndex> core;
 		std::vector<int> tou;
 		std::vector<int> tin;
@@ -143,6 +163,17 @@ namespace graph_alg
 		
 		int size() const { return core.size(); };
 	    };
+
+	    template<class VC>
+	    static bool vertex_label_compare(VDescr v_src_g1, VDescr v_trg_g1,
+					     VDescr v_src_g2, VDescr v_trg_g2,
+					     const G& g1, const G& g2,
+					     const VC& vc)
+		{
+		    return
+			vc(g1, g2, v_src_g1, v_src_g2) &&
+			vc(g1, g2, v_trg_g1, v_trg_g2);
+		}
 	};
 
 	template<class G>
@@ -354,7 +385,6 @@ namespace graph_alg
 		    ++len->t_len_in;
 		}
 	    }
-
 	}
 
 
@@ -425,6 +455,9 @@ namespace graph_alg
 	class UnDirectedPolicy
 	{
 	public:
+	    typedef typename boost::graph_traits<G>::vertex_descriptor VDescr;
+	    typedef typename boost::graph_traits<G>::edge_descriptor EDescr;
+
 	    struct Len
 	    {
 		int t_len;
@@ -438,8 +471,6 @@ namespace graph_alg
 
 	    struct MappingArrays
 	    {
-		typedef typename boost::graph_traits<G>::vertex_descriptor VDescr;
-		typedef typename boost::graph_traits<G>::edge_descriptor EDescr;
 		std::vector<EIndex> core;
 		std::vector<int> t;
 	    public:
@@ -468,6 +499,20 @@ namespace graph_alg
 		template<class EDM>
 		void print(const Len& l, const char* s, const EDM& edm) const;
 	    };
+
+	    template<class VC>
+	    static bool vertex_label_compare(VDescr v_src_g1, VDescr v_trg_g1,
+					     VDescr v_src_g2, VDescr v_trg_g2,
+					     const G& g1, const G& g2,
+					     const VC& vc)
+		{
+		    return 
+			(vc(g1, g2, v_src_g1, v_src_g2) &&
+			 vc(g1, g2, v_trg_g1, v_trg_g2))
+			||
+			(vc(g1, g2, v_src_g1, v_trg_g2) &&
+			 vc(g1, g2, v_trg_g1, v_src_g2));		    
+		}
 	};
 
 
@@ -820,12 +865,12 @@ namespace graph_alg
 	    VDescr v_src_g2 = source(e_g2, g2);
 	    VDescr v_trg_g2 = target(e_g2, g2);
 
-	    if (!
-		((vc(g1, g2, v_src_g1, v_src_g2) && vc(g1, g2, v_trg_g1, v_trg_g2))
-		 ||
-		 (vc(g1, g2, v_src_g1, v_trg_g2) && vc(g1, g2, v_trg_g1, v_src_g2)))
-		)
+
+	    if (! DirPolicy<Graph>::vertex_label_compare(v_src_g1, v_trg_g1,
+							 v_src_g2, v_trg_g2,
+							 g1, g2, vc))
 		return false;
+
 
 	    int termout1=0, termout2=0, termin1=0, termin2=0, new1=0, new2=0;	    
 
@@ -888,8 +933,8 @@ namespace graph_alg
 	{
 	    if (s.is_goal())
 	    {
-		std::cerr << "GOAL !!!\n";
-		s.print();
+		//std::cerr << "GOAL !!!\n";
+		//s.print();
 		return;
 	    }
 
@@ -973,7 +1018,7 @@ namespace graph_alg
 
 
     ///////////////////////////////////////////////////////////////////////
-    //		function isomorphism_all
+    //		function graph_isomorphism_all
     // --------------------------------------------------------------------
     //
     template<class G, class EDM, class VC, class EC>
@@ -996,6 +1041,35 @@ namespace graph_alg
     void graph_isomorphism_all(const G& g1, const G& g2)
     {
 	graph_isomorphism_all(g1, g2,
+			      detail::EDMDedault<G>(g1), detail::EDMDedault<G>(g2),
+			      detail::VertexDefaultCompatible<G>(),
+			      detail::EdgeDefaultCompatible<G>());
+    }
+
+    ///////////////////////////////////////////////////////////////////////
+    //		function subgraph_isomorphism_all
+    // --------------------------------------------------------------------
+    //
+    template<class G, class EDM, class VC, class EC>
+    void subgraph_isomorphism_all(const G& g1, const G& g2,
+			       const EDM& edm1, const EDM& edm2,
+			       const VC& vc,
+			       const EC& ec)
+    {
+	typedef detail::GSGIsomorphismPolicy<G> IsoPolicy;
+	typedef detail::Shared<G,EDM> SH;
+	SH sh1(g1, edm1);
+	SH sh2(g2, edm2);
+
+	detail::State<SH,VC,EC,IsoPolicy> state(&sh1, &sh2, vc, ec);
+	detail::match_all(state);
+    }
+
+
+    template<class G>
+    void subgraph_isomorphism_all(const G& g1, const G& g2)
+    {
+	subgraph_isomorphism_all(g1, g2,
 			      detail::EDMDedault<G>(g1), detail::EDMDedault<G>(g2),
 			      detail::VertexDefaultCompatible<G>(),
 			      detail::EdgeDefaultCompatible<G>());
