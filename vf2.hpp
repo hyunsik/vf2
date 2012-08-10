@@ -1,3 +1,10 @@
+/* ********************************************************************
+  vf2.hpp Graph(Sub)Graph isomorphism algorithm implementation
+  is released under the New BSD license
+  
+  Author: stvdedal@gmail.com
+  Project homepage: http://code.google.com/p/vf2/
+********************************************************************** */
 #ifndef VF2_H_
 #define VF2_H_
 
