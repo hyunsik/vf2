@@ -3,12 +3,15 @@
 
 #include <stdio.h>
 #include <iostream>
-
 #include <vector>
 #include <utility>
 #include <boost/graph/graph_traits.hpp>
 
 #define BR asm("int $3;")
+
+#ifndef DEBUG_PRINT
+#define DEBUG_PRINT 0
+#endif
 
 namespace graph_alg
 {
@@ -38,9 +41,9 @@ namespace graph_alg
 
     
     template<class G, class D>
-    std::ostream& print(std::ostream& stream,
-			const IsoMap<G,D>& m1,
-			const IsoMap<G,D>& m2, int n1)
+    std::ostream& print_isomap(std::ostream& stream,
+			       const IsoMap<G,D>& m1,
+			       const IsoMap<G,D>& m2, int n1)
     {
 	int n2 = n1 == 1 ? 2 : 1;
 
@@ -56,19 +59,21 @@ namespace graph_alg
 	}
 	stream << std::endl;
 
-	stream << "E_"<<n1<<":      ";	
+	stream << "E_"<<n1<<":     :";	
 	for (unsigned int i = 0; i < m1.e_core.size(); ++i) {
 	    stream.width(4);
 	    stream << i << m1.dm.get_edge_descriptor(i);
 	}
 	stream << std::endl;
 
-	stream << "E_"<<n1<<"_to_"<<n2<<": ";
+	stream << "E_"<<n1<<"_to_"<<n2<<" :";
 	for (unsigned int i = 0; i < m1.e_core.size(); ++i) {
 	    stream.width(4);
 	    EIndex ei = m1.e_core[i];
 	    if (ei != NULL_EINDEX)
 		stream << ei << m2.dm.get_edge_descriptor(ei);
+	    else
+		stream << ei << "(nil)";
 	}
 	stream << std::endl;
 	stream << std::endl;
@@ -176,6 +181,7 @@ namespace graph_alg
                                          int termin1, int termin2,
                                          int new1, int new2)
                 {
+		    return (termout1+termin1+new1) >= (termout2+termin2+new2);
                     return
                         termout1 >= termout2 &&
                         termin1 >= termin2 &&
@@ -651,7 +657,9 @@ namespace graph_alg
 		 mp2(tarr2),
 		 vc(vc), ec(ec)
 		{
-		    //print();
+#if DEBUG_PRINT != 0
+		    print();
+#endif
 		}
 	    
 	    State(const State& s, VIndex vi_g1, VIndex vi_g2)
@@ -660,9 +668,20 @@ namespace graph_alg
 		 mp2(s.mp2.tarr, s.mp2.tcnt, vi_g2),
 		 vc(s.vc), ec(s.ec)
 		{
+#if DEBUG_PRINT != 0
+		    std::cerr << "try vi: " << vi_g1 << " " << vi_g2 << " ... ";
+#endif
 		    if (! test_feasibility_and_add(vi_g1, vi_g2))
+		    {
+#if DEBUG_PRINT != 0
+			std::cerr << "fail\n";
+#endif
 			throw NotFeasibleException();
-		    //print();
+		    }
+#if DEBUG_PRINT != 0
+		    std::cerr << "ok\n";
+		    print();
+#endif
 		}
 
 	    ~State() { backtrack(); }
@@ -757,10 +776,12 @@ namespace graph_alg
 	template<class DP, class MP, class VC, class EC>
 	void State<DP,MP,VC,EC>::print() const
 	{
-            ::fprintf(std::cerr, "*********************************************************\n");
-            ::fprintf(std::cerr, "depth = %d\n", depth);
-	    print(std::cerr, *mp1.tarr, *mp2.tarr, 1);
-	    print(std::cerr, *mp2.tarr, *mp1.tarr, 2);
+            ::fprintf(stderr, "*********************************************************\n");
+            ::fprintf(stderr, "depth = %d\n", depth);
+	    const IsoMap<Graph,DM>& m1 = *mp1.tarr;
+	    const IsoMap<Graph,DM>& m2 = *mp2.tarr;
+	    print_isomap(std::cerr, m1, m2, 1);
+	    print_isomap(std::cerr, m2, m1, 2);
 	}
 
 	
@@ -790,22 +811,27 @@ namespace graph_alg
 	{
 	    if (s.is_goal())
 	    {
+#if DEBUG_PRINT != 0
 		std::cerr << "IsGoal!\n";
-		//s.print();
+#endif
 		result(s.iso_map1(), s.iso_map2());
 		return;
 	    }
 
 	    if (s.is_dead())
 	    {
+#if DEBUG_PRINT != 0
 		std::cerr << "IsDead!\n";
+#endif
 		return;
 	    }
 
 	    IndexIteratorPair ip = s.get_pairs();
             if (ip.second.get_v() == NULL_VINDEX)
 	    {
+#if DEBUG_PRINT != 0
 		std::cerr << "exit_1\n";
+#endif
                 return;
 	    }
             while (ip.first.get_v() != NULL_VINDEX)
@@ -818,8 +844,9 @@ namespace graph_alg
 		catch (typename S::NotFeasibleException) { /* just continue */ }
                 ip.first.next();
             }
-
+#if DEBUG_PRINT != 0
 	    std::cerr << "exit_2\n";
+#endif
 	}
 
 
@@ -883,8 +910,8 @@ namespace graph_alg
 	    bool operator() (const IM& m1, const IM& m2)
 		{
 		    std::cout << "--------------------------------------------------------------\n";
-		    print(std::cout, m1, m2, 1);
-		    print(std::cout, m2, m1, 2);
+		    print_isomap(std::cout, m1, m2, 1);
+		    print_isomap(std::cout, m2, m1, 2);
 		    return true;
 		}
 	};
