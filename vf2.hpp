@@ -1,1077 +1,974 @@
+#ifndef VF2_H_
+#define VF2_H_
+
+#include <stdio.h>
 #include <iostream>
+
 #include <vector>
 #include <utility>
-#include <cassert>
-#include <stdio.h>
 #include <boost/graph/graph_traits.hpp>
-
-#include <sstream>
 
 #define BR asm("int $3;")
 
 namespace graph_alg
 {
+    typedef int VIndex;
     typedef int EIndex;
-    const EIndex NULL_INDEX = -1;
+    
+    const VIndex NULL_VINDEX = -1;
+    const EIndex NULL_EINDEX = -1;
+
+    ///////////////////////////////////////////////////////////////////////
+    //              class IsoMap
+    // --------------------------------------------------------------------
+
+    template<class G, class D>
+    struct IsoMap
+    {
+	std::vector<VIndex> v_core;
+	std::vector<EIndex> e_core;
+	const G& graph;
+	const D& dm;
+	IsoMap(const G& g, const D& d)
+	    :v_core(num_vertices(g), NULL_VINDEX),
+	     e_core(num_edges(g), NULL_EINDEX),
+	     graph(g), dm(d)
+	    {}
+    };
+
+    
+    template<class G, class D>
+    std::ostream& print(std::ostream& stream,
+			const IsoMap<G,D>& m1,
+			const IsoMap<G,D>& m2, int n1)
+    {
+	int n2 = n1 == 1 ? 2 : 1;
+
+	stream << "V_" << n1 << ":      ";
+	for (unsigned int i = 0; i < m1.v_core.size(); ++i) {
+	    stream.width(4); stream << i;
+	}
+	stream << std::endl;
+
+	stream << "V_"<<n1<<"_to_"<<n2<<": ";
+	for (unsigned int i = 0; i < m1.v_core.size(); ++i) {
+	    stream.width(4); stream << m1.v_core[i];
+	}
+	stream << std::endl;
+
+	stream << "E_"<<n1<<":      ";	
+	for (unsigned int i = 0; i < m1.e_core.size(); ++i) {
+	    stream.width(4);
+	    stream << i << m1.dm.get_edge_descriptor(i);
+	}
+	stream << std::endl;
+
+	stream << "E_"<<n1<<"_to_"<<n2<<": ";
+	for (unsigned int i = 0; i < m1.e_core.size(); ++i) {
+	    stream.width(4);
+	    EIndex ei = m1.e_core[i];
+	    if (ei != NULL_EINDEX)
+		stream << ei << m2.dm.get_edge_descriptor(ei);
+	}
+	stream << std::endl;
+	stream << std::endl;
+	stream.width(0);
+	return stream;
+    }
+
 
     namespace detail
     {
-	class IndexIterator
-	{
-	    const std::vector<EIndex>* pcore;
-	    const std::vector<int>*    pterm;
-	    EIndex current;
-	    
-	    void find_next()
-		{
-		    while (current < static_cast<EIndex>(pcore->size()))
-		    {
-			if (pterm ?
-			    (*pcore)[current] == NULL_INDEX && (*pterm)[current] :
-			    (*pcore)[current] == NULL_INDEX)
-			{
-			    return;
-			}
-			++current;
-		    }
-		    current = NULL_INDEX;
-		}
-	public:
-	    IndexIterator(const std::vector<EIndex>* pc = 0,
-			  const std::vector<int>* pt = 0)
-		: pcore(pc), pterm(pt), current(0)
-		{
-		    if (pc) 
-			find_next();
-		    else
-			current = NULL_INDEX;
-		}
-
-	    EIndex get_v() const { return current; }
-	    void next()          { ++current; find_next(); }
-	};
-
-	typedef std::pair<IndexIterator,IndexIterator> IndexIteratorPair;
-
-	///////////////////////////////////////////////////////////////////////
-	//		class MatchingPolicy
-	// --------------------------------------------------------------------
+        ///////////////////////////////////////////////////////////////////////
 	template<class G>
-	class GGIsomorphismPolicy
+	bool
+	find_edge(
+	    typename boost::graph_traits<G>::vertex_descriptor v_src,
+	    typename boost::graph_traits<G>::vertex_descriptor v_trg,
+	    const G& g,
+	    typename boost::graph_traits<G>::edge_descriptor& e)
 	{
-	public:
+	    using namespace boost;
 	    typedef typename boost::graph_traits<G>::vertex_descriptor V;
-	    struct First { static bool test_eq(V v1, V v2) { return v1 == v2; } };
-	    typedef First Second;
-	    static bool check_term_count(int termout1, int termout2,
-					 int termin1, int termin2,
-					 int new1, int new2)
-		{
-		    return
-			termout1 == termout2 &&
-			termin1 == termin2 &&
-			new1 == new2;
-		}
-
-	    static bool is_goal(int depth, int n1, int n2)
-		{ return depth == n1 && depth == n2; }
-
-	    // used with is_dead()
-	    static bool op(int v1, int v2) { return v1 != v2; }
-	};
-
-
-	template<class G>
-	class GSGIsomorphismPolicy
-	{
-	public:
-	    typedef typename boost::graph_traits<G>::vertex_descriptor V;
-	    struct First  { static bool test_eq(V v1, V v2) { return true; } };
-	    struct Second { static bool test_eq(V v1, V v2) { return v1 == v2; } };
-
-	    static bool check_term_count(int termout1, int termout2,
-					 int termin1, int termin2,
-					 int new1, int new2)
-		{
-		    return
-			termout1 == termout2 &&
-			termin1 == termin2 &&
-			new1 == new2;
-		}
-
-	    static bool is_goal(int depth, int n1, int n2)
-		{ return depth == n1 && depth == n2; }
-
-	    // used with is_dead()
-	    static bool op(int v1, int v2) { return v1 != v2; }
-	};
-
-
-	///////////////////////////////////////////////////////////////////////
-	//		class DirectedPolicy
-	// --------------------------------------------------------------------
-	template<class G>
-	class DirectedPolicy
-	{
-	public:
-	    typedef typename boost::graph_traits<G>::vertex_descriptor VDescr;
-	    typedef typename boost::graph_traits<G>::edge_descriptor EDescr;
-
-
-	    struct Len
+	    typename boost::graph_traits<G>::out_edge_iterator i, iend;
+	    for (tie(i,iend) = out_edges(v_src, g); i != iend; ++i)
 	    {
-		int t_len_out;
-		int t_len_in;
-		Len() :t_len_out(0), t_len_in(0) {}
-		
-		// used with is_dead()
-		template<class OP>
-		static bool cmp(const Len& l1, const Len& l2, OP op)
-		    {
-			return
-			    op(l1.t_len_out, l2.t_len_out) ||
-			    op(l1.t_len_in, l2.t_len_in);
-		    }
-	    };
-
-	    class MappingArrays
-	    {
-		std::vector<EIndex> core;
-		std::vector<int> tou;
-		std::vector<int> tin;
-	    public:
-		MappingArrays(int n)
-		    : core(n, NULL_INDEX),
-		      tou(n, 0),
-		      tin(n, 0) {}
-		
-		static IndexIteratorPair pairs(const MappingArrays& ma1, const Len& len1,
-					       const MappingArrays& ma2, const Len& len2);
-
-		template<class MP_FN, class EDM>
-		bool feasible(EDescr edge_g1, VDescr v_src_g1, VDescr v_trg_g1,
-			      EDescr edge_g2, VDescr v_src_g2, VDescr v_trg_g2,
-			      const G& g1, const G& g2,
-			      const EDM& edm1, const EDM& edm2,
-			      int* termout, int* termin, int* nnew) const;
-
-		template<class EDM>
-		void add(const G& g, EIndex, EIndex, Len* len, int depth, const EDM& edm);
-
-		template<class EDM>
-		void backtrack(const G& g, EIndex i, int depth, const EDM& edm);
-		
-		int size() const { return core.size(); };
-	    };
-
-	    template<class VC>
-	    static bool vertex_label_compare(VDescr v_src_g1, VDescr v_trg_g1,
-					     VDescr v_src_g2, VDescr v_trg_g2,
-					     const G& g1, const G& g2,
-					     const VC& vc)
+		V v = target(*i, g);
+		if (v == v_trg)
 		{
-		    return
-			vc(g1, g2, v_src_g1, v_src_g2) &&
-			vc(g1, g2, v_trg_g1, v_trg_g2);
+		    e = *i;
+		    return true;
 		}
-	};
-
-	template<class G>
-	IndexIteratorPair DirectedPolicy<G>::MappingArrays::
-	pairs(const MappingArrays& ma1, const Len& len1,
-	      const MappingArrays& ma2, const Len& len2)
-	{
-	    if (len1.t_len_out > 0 && len2.t_len_out > 0)
-		return IndexIteratorPair(IndexIterator(&ma1.core, &ma1.tou),
-					 IndexIterator(&ma2.core, &ma2.tou));
-
-	    if (len1.t_len_out + len2.t_len_out == 0 &&
-		len1.t_len_in > 0 && len2.t_len_in > 0)
-		return IndexIteratorPair(IndexIterator(&ma1.core, &ma1.tin),
-					 IndexIterator(&ma2.core, &ma2.tin));
-
-	    if (len1.t_len_out + len2.t_len_out + len1.t_len_in + len2.t_len_in == 0)
-		return IndexIteratorPair(IndexIterator(&ma1.core),
-					 IndexIterator(&ma2.core));
-	    
-	    return IndexIteratorPair();
+	    }
+	    return false;
 	}
+
+        ///////////////////////////////////////////////////////////////////////
+        //              class IndexIterator
+        // --------------------------------------------------------------------
+        class IndexIterator
+        {
+            const std::vector<VIndex>* pcore;
+            const std::vector<int>*    pterm;
+            VIndex current;
+            
+            void find_next()
+                {
+		    int n = pcore->size();
+                    while (current < n)
+                    {
+                        if (pterm ?
+                            (*pcore)[current] == NULL_VINDEX && (*pterm)[current] :
+                            (*pcore)[current] == NULL_VINDEX)
+                        {
+                            return;
+                        }
+                        ++current;
+                    }
+                    current = NULL_VINDEX;
+                }
+        public:
+            IndexIterator(const std::vector<VIndex>* pc = 0,
+                          const std::vector<int>* pt = 0)
+                : pcore(pc), pterm(pt), current(0)
+                {
+                    if (pc) 
+                        find_next();
+                    else
+                        current = NULL_VINDEX;
+                }
+
+            EIndex get_v() const { return current; }
+            void next()          { ++current; find_next(); }
+        };
+
+        typedef std::pair<IndexIterator,IndexIterator> IndexIteratorPair;
+
+        ///////////////////////////////////////////////////////////////////////
+        //              class MatchingPolicy
+        // --------------------------------------------------------------------
+        template<class G>
+        struct GGIsomorphismPolicy
+	{
+	    static const bool chk_exit = true;
+
+	    static bool check_term_count(int termout1, int termout2,
+                                         int termin1, int termin2,
+                                         int new1, int new2)
+                {
+                    return
+                        termout1 == termout2 &&
+                        termin1 == termin2 &&
+                        new1 == new2;
+                }
+
+            // used with is_dead()
+            static bool op(int v1, int v2) { return v1 != v2; }
+	};
+
+
+        template<class G>
+        struct GSGIsomorphismPolicy
+	{
+	    static const bool chk_exit = false;
+
+	    static bool check_term_count(int termout1, int termout2,
+                                         int termin1, int termin2,
+                                         int new1, int new2)
+                {
+                    return
+                        termout1 >= termout2 &&
+                        termin1 >= termin2 &&
+                        new1 >= new2;
+                }
+
+            // used with is_dead()
+            static bool op(int v1, int v2) { return v1 < v2; }
+	};
+
+	typedef std::pair<EIndex,EIndex> EIndexPair;
+	typedef std::list<EIndexPair> EIndexPairs;
+ 
+	struct M { std::vector<EIndex>& m; M(std::vector<EIndex>& m_) :m(m_) {} };
+
+	struct MM1 : public M {
+	    MM1(std::vector<EIndex>& m_) :M(m_) {}	    
+	    void operator() (const EIndexPair& v) { m[v.first] = v.second; }
+	};
+
+	struct MM2 : public M {
+	    MM2(std::vector<EIndex>& m_) :M(m_) {}	    
+	    void operator() (const EIndexPair& v) { m[v.second] = v.first; }
+	};
+
+
+	struct M1 : public M {
+	    M1(std::vector<EIndex>& m_) :M(m_) {}	    
+	    void operator() (const EIndexPair& v) { m[v.first] = NULL_EINDEX; }
+	};
+
+	struct M2 : public M {
+	    M2(std::vector<EIndex>& m_) :M(m_) {}	    
+	    void operator() (const EIndexPair& v) { m[v.second] = NULL_EINDEX; }
+	};
 	
 
-	template<class G>
-	template<class MP_FN, class EDM>
-	bool DirectedPolicy<G>::MappingArrays::
-	feasible(EDescr edge_g1, VDescr v_src_g1, VDescr v_trg_g1,
-		 EDescr edge_g2, VDescr v_src_g2, VDescr v_trg_g2,
-		 const G& g1, const G& g2,
-		 const EDM& edm1, const EDM& edm2,
-		 int* termout, int* termin, int* nnew) const
+        ///////////////////////////////////////////////////////////////////////
+        //              class DirectionPolicy
+        // --------------------------------------------------------------------
+	template<class G, class D>
+	struct DirectedPolicy
 	{
-	    // =======================================================
-	    // check OUT edges incidenced to edge_g1
-	    // =======================================================
-	    typename boost::graph_traits<G>::out_edge_iterator o_i, e_end;
+	    typedef G Graph;
+	    typedef D DM;
+            typedef typename boost::graph_traits<G>::vertex_descriptor VDescr;
+            typedef typename boost::graph_traits<G>::edge_descriptor EDescr;
+
+	    struct TCount
+	    {
+		int t_ou_len;
+		int t_in_len;
+		TCount() :t_ou_len(0), t_in_len(0) {}
+		
+		// used with is_dead()
+                template<class OP>
+                static bool cmp(const TCount& l1, const TCount& l2, OP op)
+                    {
+                        return
+                            op(l1.t_len_out, l2.t_len_out) ||
+                            op(l1.t_len_in, l2.t_len_in);
+                    }
+	    };
+
+	    struct TArray : public IsoMap<G,D>
+	    {
+		std::vector<int> t_ou;
+		std::vector<int> t_in;
+		TArray(const G& g, const D& d)
+		    :IsoMap<G,D>(g, d),
+		     t_ou(num_vertices(g), 0),
+		     t_in(num_vertices(g), 0)
+		    {}
+
+		static IndexIteratorPair get_pairs(const TArray*, const TCount&,
+						   const TArray*, const TCount&);
+
+		template<class EC>
+		static bool feasible(VDescr v_g1, VDescr v_g2,
+				     const TArray* t1, const TArray* t2,
+				     int* termout, int* termin, int* nnew,
+				     EIndexPairs*,
+				     const EC&,
+				     bool);
+
+		void make_tarray(VIndex vi_g1, TCount*cnt, int depth);
+		void backtrack_tarray(VIndex vi_last, int depth);
+	    };
+	};
+	
+
+	template<class G, class D>	
+	IndexIteratorPair
+	DirectedPolicy<G,D>::TArray::get_pairs(const TArray* tarr1, const TCount& cnt1,
+					       const TArray* tarr2, const TCount& cnt2)
+	{
+            if (cnt1.t_ou_len > 0 && cnt2.t_ou_len > 0)
+                return IndexIteratorPair(IndexIterator(&tarr1->v_core, &tarr1->t_ou),
+                                         IndexIterator(&tarr2->v_core, &tarr2->t_ou));
 	    
-	    // -------------------------
-	    // FROM v_src_g1
-	    for (boost::tie(o_i,e_end) = out_edges(v_src_g1, g1); o_i != e_end; ++o_i)
-	    {
-		EDescr outedge_g1 = *o_i;
-		if (edge_g1 == outedge_g1)
-		    continue;
-		EIndex index_outedge_g1 = edm1.get_edge_index(outedge_g1);
-		if (core[index_outedge_g1] != NULL_INDEX)
-		{
-		    EDescr outedge_g1_to_g2 = edm2.get_edge_descriptor(core[index_outedge_g1]);
-		    if (! MP_FN::test_eq(v_src_g2, source(outedge_g1_to_g2, g2)))
-			return false;
-		}
-		else
-		{
-		    if (tou[index_outedge_g1]) ++*termout;
-		    if (tin[index_outedge_g1]) ++*termin;
-		    if (!tou[index_outedge_g1] && !tin[index_outedge_g1]) ++*nnew;
-		}
-	    }
+            if (cnt1.t_ou_len + cnt2.t_ou_len == 0 &&
+		cnt1.t_in_len > 0 && cnt2.t_in_len > 0)
+                return IndexIteratorPair(IndexIterator(&tarr1->v_core, &tarr1->t_in),
+                                         IndexIterator(&tarr2->v_core, &tarr2->t_in));
+	    
+            if (cnt1.t_ou_len + cnt2.t_ou_len + cnt1.t_in_len + cnt2.t_in_len == 0)
+                return IndexIteratorPair(IndexIterator(&tarr1->v_core),
+                                         IndexIterator(&tarr2->v_core));	    
+	    return IndexIteratorPair();
+	}
 
-	    // -------------------------
-	    // FROM v_trg_g1
-	    for (boost::tie(o_i,e_end) = out_edges(v_trg_g1, g1); o_i != e_end; ++o_i)
+
+	template<class G, class D>
+	template<class EC>
+	bool
+	DirectedPolicy<G,D>::TArray::feasible(VDescr v_g1, VDescr v_g2,
+					      const TArray* t1, const TArray* t2,
+					      int* termout, int* termin, int* nnew,
+					      EIndexPairs* added_edges,
+					      const EC& ec,
+					      bool exit_if_no_edge)
+	{
+	    const G& g1 = t1->graph;
+	    const G& g2 = t2->graph;
+	    const DM& dm1 = t1->dm;
+	    const DM& dm2 = t2->dm;
+
+	    // =======================================================
+	    // check adjacent vertices of the v_g1 (OUT edges)
+	    // =======================================================
+	    typename boost::graph_traits<G>::out_edge_iterator o_i, o_end;
+	    for (boost::tie(o_i,o_end) = out_edges(v_g1, g1); o_i != o_end; ++o_i)
 	    {
-		EDescr outedge_g1 = *o_i;
-		if (edge_g1 == outedge_g1)
-		    continue;
-		EIndex index_outedge_g1 = edm1.get_edge_index(outedge_g1);
-		if (core[index_outedge_g1] != NULL_INDEX)
+		EDescr e_g1 = *o_i;
+		EIndex ei_g1 = dm1.get_edge_index(e_g1);
+		VDescr v_g1_adj = target(e_g1, g1);
+		VIndex vi_g1_adj = dm1.get_vertex_index(v_g1_adj);
+		if (t1->v_core[vi_g1_adj] != NULL_VINDEX)
 		{
-		    EDescr outedge_g1_to_g2 = edm2.get_edge_descriptor(core[index_outedge_g1]);
-		    if (! MP_FN::test_eq(v_trg_g2, source(outedge_g1_to_g2, g2)))
-			return false;
+		    VIndex vi_g2_adj = t1->v_core[vi_g1_adj];
+		    VDescr v_g2_adj = dm2.get_vertex_descriptor(vi_g2_adj);
+		    
+		    // if exist the edge (v_g2 -> v_g2_adj)
+		    EDescr e_g2;
+		    if (find_edge(v_g2, v_g2_adj, g2, e_g2) && ec(g1, g2, e_g1, e_g2))
+		    {
+			if (added_edges)
+			{
+			    EIndex ei_g2 = dm2.get_edge_index(e_g2);
+			    added_edges->push_back(EIndexPair(ei_g2,ei_g1));
+			}
+		    }
+		    else
+			if (exit_if_no_edge)
+			    return false;
 		}
 		else
 		{
-		    if (tou[index_outedge_g1]) ++*termout;
-		    if (tin[index_outedge_g1]) ++*termin;
-		    if (!tou[index_outedge_g1] && !tin[index_outedge_g1]) ++*nnew;
-		}		
+		    if (t1->t_ou[vi_g1_adj]) ++*termout;
+		    if (t1->t_in[vi_g1_adj]) ++*termin;
+		    if (!t1->t_ou[vi_g1_adj] && !t1->t_in[vi_g1_adj]) ++*nnew;
+		}
 	    }
 
 
 	    // =======================================================
-	    // check IN edges incidenced to edge_g1
+	    // check adjacent vertices of the v_g1 (IN edges)
 	    // =======================================================
 	    typename boost::graph_traits<G>::in_edge_iterator i_i, i_end;
-
-	    // -------------------------
-	    // TO v_src_g1
-	    for (boost::tie(i_i,i_end) = in_edges(v_src_g1, g1); i_i != i_end; ++i_i)
+	    for (boost::tie(i_i,i_end) = in_edges(v_g1, g1); i_i != i_end; ++i_i)
 	    {
-		EDescr inedge_g1 = *i_i;
-		if (edge_g1 == inedge_g1)
-		    continue;
-		EIndex index_inedge_g1 = edm1.get_edge_index(inedge_g1);
-		if (core[index_inedge_g1] != NULL_INDEX)
+		EDescr e_g1 = *i_i;
+		EIndex ei_g1 = dm1.get_edge_index(e_g1);
+		VDescr v_g1_adj = source(e_g1, g1);
+		VIndex vi_g1_adj = dm1.get_vertex_index(v_g1_adj);
+		if (t1->v_core[vi_g1_adj] != NULL_VINDEX)
 		{
-		    EDescr inedge_g1_to_g2 = edm2.get_edge_descriptor(core[index_inedge_g1]);
-		    if (! MP_FN::test_eq(v_src_g2, target(inedge_g1_to_g2, g2)))
-			return false;		    
+		    VIndex vi_g2_adj = t1->v_core[vi_g1_adj];
+		    VDescr v_g2_adj = dm2.get_vertex_descriptor(vi_g2_adj);
+		    
+		    // if exist the edge (v_g2_adj -> v_g2)
+		    EDescr e_g2;
+		    if (find_edge(v_g2_adj, v_g2, g2, e_g2) && ec(g1, g2, e_g1, e_g2))
+		    {
+			if (added_edges)
+			{
+			    EIndex ei_g2 = dm2.get_edge_index(e_g2);
+			    added_edges->push_back(EIndexPair(ei_g2,ei_g1));
+			}
+		    }
+		    else
+			if (exit_if_no_edge)
+			    return false;
 		}
 		else
 		{
-		    if (tou[index_inedge_g1]) ++*termout;
-		    if (tin[index_inedge_g1]) ++*termin;
-		    if (!tou[index_inedge_g1] && !tin[index_inedge_g1]) ++*nnew;
+		    if (t1->t_ou[vi_g1_adj]) ++*termout;
+		    if (t1->t_in[vi_g1_adj]) ++*termin;
+		    if (!t1->t_ou[vi_g1_adj] && !t1->t_in[vi_g1_adj]) ++*nnew;
 		}
-	    }
-
-
-	    // -------------------------
-	    // TO v_trg_g1
-	    for (boost::tie(i_i,i_end) = in_edges(v_trg_g1, g1); i_i != i_end; ++i_i)
-	    {
-		EDescr inedge_g1 = *i_i;
-		if (edge_g1 == inedge_g1)
-		    continue;
-		EIndex index_inedge_g1 = edm1.get_edge_index(inedge_g1);
-		if (core[index_inedge_g1] != NULL_INDEX)
-		{
-		    EDescr inedge_g1_to_g2 = edm2.get_edge_descriptor(core[index_inedge_g1]);
-		    if (! MP_FN::test_eq(v_trg_g2, target(inedge_g1_to_g2, g2)))
-			return false;
-		}
-		else
-		{
-		    if (tou[index_inedge_g1]) ++*termout;
-		    if (tin[index_inedge_g1]) ++*termin;
-		    if (!tou[index_inedge_g1] && !tin[index_inedge_g1]) ++*nnew;
-		}
-
 	    }
 
 	    return true;
 	}
 
 
-	template<class G>
-	template<class EDM>
-	void DirectedPolicy<G>::MappingArrays::
-	add(const G& g, EIndex i, EIndex j, Len* len, int depth, const EDM& edm)
+	template<class G, class D>
+	void DirectedPolicy<G,D>::TArray::make_tarray(VIndex vi_g1, TCount*cnt, int depth)
 	{
-	    core[i] = j;
+	    const G& g = this->graph;
+	    const DM& dm = this->dm;
 
+	    if (t_ou[vi_g1] == 0) t_ou[vi_g1] = depth; else --cnt->t_ou_len;
+	    if (t_in[vi_g1] == 0) t_in[vi_g1] = depth; else --cnt->t_in_len;
 	    
-	    if (0 == tou[i]) tou[i] = depth; else --len->t_out_len;
-	    if (0 == tin[i]) tin[i] = depth; else --len->t_in_len;
+	    VDescr v = dm.get_vertex_descriptor(vi_g1);
 
-	    EDescr e = edm.get_edge_descriptor(i);
-	    VDescr v_src = source(e, g);
-	    VDescr v_trg = target(e, g);
-
-	    // =======================================================
-	    // count OUT edges incidenced to e
-	    // =======================================================
-	    typename boost::graph_traits<G>::out_edge_iterator o_i, e_end;
-
-	    // -------------------------
-	    // FROM v_src
-	    for (boost::tie(o_i,e_end) = out_edges(v_src, g); o_i != e_end; ++o_i)
+	    typename boost::graph_traits<G>::out_edge_iterator o_i, o_end;
+	    for (boost::tie(o_i,o_end) = out_edges(v, g); o_i != o_end; ++o_i)
 	    {
-		EIndex index_out_edge = edm.get_edge_index(*o_i);
-		if (tou[index_out_edge] == 0)
+		VIndex vi_adj = dm.get_vertex_index(target(*o_i, g));
+		if (t_ou[vi_adj] == 0)
 		{
-		    tou[index_out_edge] = depth;
-		    ++len->t_len_out;
+		    t_ou[vi_adj] = depth;
+		    ++cnt->t_ou_len;
 		}
 	    }
 
-	    // -------------------------
-	    // FROM v_trg
-	    for (boost::tie(o_i,e_end) = out_edges(v_trg, g); o_i != e_end; ++o_i)
-	    {
-		EIndex index_out_edge = edm.get_edge_index(*o_i);
-		if (tou[index_out_edge] == 0)
-		{
-		    tou[index_out_edge] = depth;
-		    ++len->t_len_out;
-		}
-	    }
-
-
-	    // =======================================================
-	    // count IN edges incidenced to e
-	    // =======================================================
 	    typename boost::graph_traits<G>::in_edge_iterator i_i, i_end;
-
-	    // -------------------------
-	    // TO v_src
-	    for (boost::tie(i_i,i_end) = in_edges(v_src, g); i_i != i_end; ++i_i)
+	    for (boost::tie(i_i,i_end) = in_edges(v, g); i_i != i_end; ++i_i)
 	    {
-		EIndex index_in_edge = edm.get_edge_index(*i_i);
-		if (tou[index_in_edge] == 0)
+		VIndex vi_adj = dm.get_vertex_index(source(*i_i, g));
+		if (t_in[vi_adj] == 0)
 		{
-		    tin[index_in_edge] = depth;
-		    ++len->t_len_in;
+		    t_in[vi_adj] = depth;
+		    ++cnt->t_in_len;
 		}
 	    }
+	   
+	}
 
-	    // -------------------------
-	    // TO v_trg
-	    for (boost::tie(i_i,i_end) = in_edges(v_trg, g); i_i != i_end; ++i_i)
+
+	template<class G, class D>
+	void DirectedPolicy<G,D>::TArray::backtrack_tarray(VIndex vi_last, int depth)
+	{
+	    if (t_ou[vi_last] == depth) t_ou[vi_last] = 0;
+	    if (t_in[vi_last] == depth) t_in[vi_last] = 0;
+
+	    VDescr v = this->dm.get_vertex_descriptor(vi_last);
+
+	    typename boost::graph_traits<G>::out_edge_iterator o_i, o_end;
+	    for (boost::tie(o_i,o_end) = out_edges(v, this->graph); o_i != o_end; ++o_i)
 	    {
-		EIndex index_in_edge = edm.get_edge_index(*i_i);
-		if (tou[index_in_edge] == 0)
-		{
-		    tin[index_in_edge] = depth;
-		    ++len->t_len_in;
-		}
+		VIndex vi_adj = this->dm.get_vertex_index(target(*o_i, this->graph));
+		if (t_ou[vi_adj] == depth) t_ou[vi_adj] = 0;
+	    }
+
+	    typename boost::graph_traits<G>::in_edge_iterator i_i, i_end;
+	    for (boost::tie(i_i,i_end) = in_edges(v, this->graph); i_i != i_end; ++i_i)
+	    {
+		VIndex vi_adj = this->dm.get_vertex_index(source(*i_i, this->graph));
+		if (t_in[vi_adj] == depth) t_in[vi_adj] = 0;
 	    }
 	}
 
 
-	template<class G>
-	template<class EDM>
-	void DirectedPolicy<G>::MappingArrays::
-	backtrack(const G& g, EIndex i, int depth, const EDM& edm)
+        ///////////////////////////////////////////////////////////////////////
+        //              class UnDirectionPolicy
+        // --------------------------------------------------------------------
+	template<class G, class D>
+	struct UnDirectedPolicy
 	{
-	    assert(core[i] != NULL_INDEX);
+	    typedef G Graph;
+	    typedef D DM;
+            typedef typename boost::graph_traits<G>::vertex_descriptor VDescr;
+            typedef typename boost::graph_traits<G>::edge_descriptor EDescr;
 
-	    if (tou[i] == depth) tou[i] = 0;
-	    if (tin[i] == depth) tin[i] = 0;
-
-	    EDescr e = edm.get_edge_descriptor(i);
-	    VDescr v_src = source(e, g);
-	    VDescr v_trg = target(e, g);
-
-	    // =======================================================
-	    // check OUT edges incidenced to e
-	    // =======================================================
-	    typename boost::graph_traits<G>::out_edge_iterator o_i, e_end;
-	 
-	    // -------------------------
-	    // FROM v_src
-	    for (boost::tie(o_i,e_end) = out_edges(v_src, g); o_i != e_end; ++o_i)
-	    {
-		EIndex j = edm.get_edge_index(*o_i);
-		if (tou[j] == depth) tou[j] = 0;
-	    }
-
-	    // -------------------------
-	    // FROM v_trg
-	    for (boost::tie(o_i,e_end) = out_edges(v_trg, g); o_i != e_end; ++o_i)
-	    {
-		EIndex j = edm.get_edge_index(*o_i);
-		if (tou[j] == depth) tou[j] = 0;
-	    }
-
-	    // =======================================================
-	    // check IN edges incidenced to e
-	    // =======================================================
-	    typename boost::graph_traits<G>::in_edge_iterator i_i, i_end;
-	 
-	    // -------------------------
-	    // TO v_src
-	    for (boost::tie(i_i,i_end) = in_edges(v_src, g); i_i != i_end; ++i_i)
-	    {
-		EIndex j = edm.get_edge_index(*i_i);
-		if (tin[j] == depth) tin[j] = 0;
-	    }
-
-	    // -------------------------
-	    // TO v_trg
-	    for (boost::tie(i_i,i_end) = in_edges(v_trg, g); i_i != i_end; ++i_i)
-	    {
-		EIndex j = edm.get_edge_index(*i_i);
-		if (tin[j] == depth) tin[j] = 0;
-	    }
-
-	    core[i] = NULL_INDEX;
-	}
-
-	
-	///////////////////////////////////////////////////////////////////////
-	//		class UnDirectedPolicy
-	// --------------------------------------------------------------------
-	template<class G>
-	class UnDirectedPolicy
-	{
-	public:
-	    typedef typename boost::graph_traits<G>::vertex_descriptor VDescr;
-	    typedef typename boost::graph_traits<G>::edge_descriptor EDescr;
-
-	    struct Len
+	    struct TCount
 	    {
 		int t_len;
-		Len() :t_len(0) {}
-
+		TCount() :t_len(0) {}
 		// used with is_dead()
-		template<class OP>
-		static bool cmp(const Len& l1, const Len& l2, OP op)
-		    { return op(l1.t_len, l2.t_len); }
+                template<class OP>
+                static bool cmp(const TCount& l1, const TCount& l2, OP op)
+                    {
+                        return op(l1.t_len, l2.t_len);
+                    }
 	    };
 
-	    struct MappingArrays
+	    struct TArray : public IsoMap<G,D>
 	    {
-		std::vector<EIndex> core;
 		std::vector<int> t;
-	    public:
-		MappingArrays(int n)
-		    : core(n, NULL_INDEX),
-		      t(n, 0) {}
+		TArray(const G& g, const D& d)
+		    :IsoMap<G,D>(g, d),
+		     t(num_vertices(g), 0)
+		    {}
 
-		static IndexIteratorPair pairs(const MappingArrays& ma1, const Len& len1,
-					       const MappingArrays& ma2, const Len& len2);
+		static IndexIteratorPair get_pairs(const TArray*, const TCount&,
+						   const TArray*, const TCount&);
 
-		template<class MP_FN, class EDM>
-		bool feasible(EDescr edge_g1, VDescr v_src_g1, VDescr v_trg_g1,
-			      EDescr edge_g2, VDescr v_src_g2, VDescr v_trg_g2,
-			      const G& g1, const G& g2,
-			      const EDM& edm1, const EDM& edm2,
-			      int* termout, int* termin, int* nnew) const;
+		template<class EC>
+		static bool feasible(VDescr v_g1, VDescr v_g2,
+				     const TArray* t1, const TArray* t2,
+				     int* termout, int* termin, int* nnew,
+				     EIndexPairs*,
+				     const EC&,
+				     bool);
 
-		template<class EDM>
-		void add(const G& g, EIndex, EIndex, Len* len, int depth, const EDM& edm);
-
-		template<class EDM>
-		void backtrack(const G& g, EIndex i, int depth, const EDM& edm);
-
-		int size() const { return core.size(); };
-
-		template<class EDM>
-		void print(const Len& l, const char* s, const EDM& edm) const;
+		void make_tarray(VIndex vi_g1, TCount*cnt, int depth);
+		void backtrack_tarray(VIndex vi_last, int depth);
 	    };
-
-	    template<class VC>
-	    static bool vertex_label_compare(VDescr v_src_g1, VDescr v_trg_g1,
-					     VDescr v_src_g2, VDescr v_trg_g2,
-					     const G& g1, const G& g2,
-					     const VC& vc)
-		{
-		    return 
-			(vc(g1, g2, v_src_g1, v_src_g2) &&
-			 vc(g1, g2, v_trg_g1, v_trg_g2))
-			||
-			(vc(g1, g2, v_src_g1, v_trg_g2) &&
-			 vc(g1, g2, v_trg_g1, v_src_g2));		    
-		}
 	};
 
 
-	template<class G>
-	IndexIteratorPair UnDirectedPolicy<G>::MappingArrays::
-	pairs(const MappingArrays& ma1, const Len& len1,
-	      const MappingArrays& ma2, const Len& len2)
+
+	template<class G, class D>	
+	IndexIteratorPair
+	UnDirectedPolicy<G,D>::TArray::get_pairs(const TArray* tarr1, const TCount& cnt1,
+						 const TArray* tarr2, const TCount& cnt2)
 	{
-	    if (len1.t_len > 0 && len2.t_len > 0)
-		return IndexIteratorPair(IndexIterator(&ma1.core, &ma1.t),
-					 IndexIterator(&ma2.core, &ma2.t));
-
-	    if (len1.t_len == 0 && len2.t_len == 0)
-		return IndexIteratorPair(IndexIterator(&ma1.core),
-					 IndexIterator(&ma2.core));
-
+            if (cnt1.t_len > 0 && cnt2.t_len > 0)
+                return IndexIteratorPair(IndexIterator(&tarr1->v_core, &tarr1->t),
+                                         IndexIterator(&tarr2->v_core, &tarr2->t));   
+            if (cnt1.t_len + cnt2.t_len == 0)
+                return IndexIteratorPair(IndexIterator(&tarr1->v_core),
+                                         IndexIterator(&tarr2->v_core));
 	    return IndexIteratorPair();
 	}
 
-	
-	template<class G>
-	template<class MP_FN, class EDM>
-	bool UnDirectedPolicy<G>::MappingArrays::
-	feasible(EDescr edge_g1, VDescr v_src_g1, VDescr v_trg_g1,
-		 EDescr edge_g2, VDescr v_src_g2, VDescr v_trg_g2,
-		 const G& g1, const G& g2,
-		 const EDM& edm1, const EDM& edm2,
-		 int* termout, int* termin, int* nnew) const
+
+	template<class G, class D>
+	template<class EC>
+	bool
+	UnDirectedPolicy<G,D>::TArray::feasible(VDescr v_g1, VDescr v_g2,
+						const TArray* t1, const TArray* t2,
+						int* termout, int* termin, int* nnew,
+						EIndexPairs* added_edges,
+						const EC& ec,
+						bool exit_if_no_edge)
 	{
-	    // =======================================================
-	    // check edges incidenced to edge_g1
-	    // =======================================================
-	    typename boost::graph_traits<G>::out_edge_iterator o_i, e_end;
-	    
-	    // -------------------------
-	    // FROM v_src_g1
-	    for (boost::tie(o_i,e_end) = out_edges(v_src_g1, g1); o_i != e_end; ++o_i)
-	    {
-		EDescr outedge_g1 = *o_i;
-		if (edge_g1 == outedge_g1)
-		    continue;
-		EIndex index_outedge_g1 = edm1.get_edge_index(outedge_g1);
-		if (core[index_outedge_g1] != NULL_INDEX)
-		{
-		    EDescr outedge_g1_to_g2 = edm2.get_edge_descriptor(core[index_outedge_g1]);
-		    VDescr v_src_outedge_g1_to_g2 = source(outedge_g1_to_g2, g2);
-		    VDescr v_trg_outedge_g1_to_g2 = target(outedge_g1_to_g2, g2);
+	    const G& g1 = t1->graph;
+	    const G& g2 = t2->graph;
+	    const DM& dm1 = t1->dm;
+	    const DM& dm2 = t2->dm;
 
-		    if (! (MP_FN::test_eq(v_trg_g2, v_src_outedge_g1_to_g2) ||
-			   MP_FN::test_eq(v_trg_g2, v_trg_outedge_g1_to_g2) ||
-			   MP_FN::test_eq(v_src_g2, v_src_outedge_g1_to_g2) ||
-			   MP_FN::test_eq(v_src_g2, v_trg_outedge_g1_to_g2))
-			)
-			return false;
+	    // =======================================================
+	    // check adjacent vertices of the v_g1 (OUT edges)
+	    // =======================================================
+	    typename boost::graph_traits<G>::out_edge_iterator o_i, o_end;
+	    for (boost::tie(o_i,o_end) = out_edges(v_g1, g1); o_i != o_end; ++o_i)
+	    {
+		EDescr e_g1 = *o_i;
+		EIndex ei_g1 = dm1.get_edge_index(e_g1);
+		VDescr v_g1_adj = target(e_g1, g1);
+		VIndex vi_g1_adj = dm1.get_vertex_index(v_g1_adj);
+		if (t1->v_core[vi_g1_adj] != NULL_VINDEX)
+		{
+		    VIndex vi_g2_adj = t1->v_core[vi_g1_adj];
+		    VDescr v_g2_adj = dm2.get_vertex_descriptor(vi_g2_adj);
+		    
+		    // if exist the edge (v_g2 -> v_g2_adj)
+		    EDescr e_g2;
+		    if (find_edge(v_g2, v_g2_adj, g2, e_g2) && ec(g1, g2, e_g1, e_g2))
+		    {
+			if (added_edges)
+			{
+			    EIndex ei_g2 = dm2.get_edge_index(e_g2);
+			    added_edges->push_back(EIndexPair(ei_g2,ei_g1));
+			}
+		    }
+		    else
+			if (exit_if_no_edge)
+			    return false;
 		}
 		else
 		{
-		    if (t[index_outedge_g1]) ++*termout;
+		    if (t1->t[vi_g1_adj]) ++*termout;
+		    if (!t1->t[vi_g1_adj]) ++*nnew;
 		}
-	    }
-
-	    // -------------------------
-	    // FROM v_trg_g1
-	    for (boost::tie(o_i,e_end) = out_edges(v_trg_g1, g1); o_i != e_end; ++o_i)
-	    {
-		EDescr outedge_g1 = *o_i;
-		if (edge_g1 == outedge_g1)
-		    continue;
-		EIndex index_outedge_g1 = edm1.get_edge_index(outedge_g1);
-		if (core[index_outedge_g1] != NULL_INDEX)
-		{
-		    EDescr outedge_g1_to_g2 = edm2.get_edge_descriptor(core[index_outedge_g1]);
-		    VDescr v_src_outedge_g1_to_g2 = source(outedge_g1_to_g2, g2);
-		    VDescr v_trg_outedge_g1_to_g2 = target(outedge_g1_to_g2, g2);
-
-		    if (! (MP_FN::test_eq(v_trg_g2, v_src_outedge_g1_to_g2) ||
-			   MP_FN::test_eq(v_trg_g2, v_trg_outedge_g1_to_g2) ||
-			   MP_FN::test_eq(v_src_g2, v_src_outedge_g1_to_g2) ||
-			   MP_FN::test_eq(v_src_g2, v_trg_outedge_g1_to_g2))
-			)
-			return false;
-		}
-		else
-		{
-		    if (t[index_outedge_g1]) ++*termout;
-		}		
 	    }
 
 	    return true;
 	}
 
 
-	template<class G>
-	template<class EDM>
-	void UnDirectedPolicy<G>::MappingArrays::
-	add(const G& g, EIndex i, EIndex j, Len* len, int depth, const EDM& edm)
-	{
-	    core[i] = j;
-	    
-	    if (0 == t[i]) t[i] = depth; else --len->t_len;
-
-	    EDescr e = edm.get_edge_descriptor(i);
-	    VDescr v_src = source(e, g);
-	    VDescr v_trg = target(e, g);
-
-	    // =======================================================
-	    // count OUT edges incidenced to e
-	    // =======================================================
-	    typename boost::graph_traits<G>::out_edge_iterator o_i, e_end;
-
-	    // -------------------------
-	    // FROM v_src
-	    for (boost::tie(o_i,e_end) = out_edges(v_src, g); o_i != e_end; ++o_i)
-	    {
-		EIndex index_out_edge = edm.get_edge_index(*o_i);
-		if (t[index_out_edge] == 0)
-		{
-		    t[index_out_edge] = depth;
-		    ++len->t_len;
-		}
-	    }
-
-	    // -------------------------
-	    // FROM v_trg
-	    for (boost::tie(o_i,e_end) = out_edges(v_trg, g); o_i != e_end; ++o_i)
-	    {
-		EIndex index_out_edge = edm.get_edge_index(*o_i);
-		if (t[index_out_edge] == 0)
-		{
-		    t[index_out_edge] = depth;
-		    ++len->t_len;
-		}
-	    }
-
-	}
-
-
-
-	template<class G>
-	template<class EDM>
-	void UnDirectedPolicy<G>::MappingArrays::
-	backtrack(const G& g, EIndex i, int depth, const EDM& edm)
-	{
-	    assert(core[i] != NULL_INDEX);
-
-	    if (t[i] == depth) t[i] = 0;
-
-	    EDescr e = edm.get_edge_descriptor(i);
-	    VDescr v_src = source(e, g);
-	    VDescr v_trg = target(e, g);
-
-	    // =======================================================
-	    // check edges incidenced to e
-	    // =======================================================
-	    typename boost::graph_traits<G>::out_edge_iterator o_i, e_end;
-	 
-	    // -------------------------
-	    // FROM v_src
-	    for (boost::tie(o_i,e_end) = out_edges(v_src, g); o_i != e_end; ++o_i)
-	    {
-		EIndex j = edm.get_edge_index(*o_i);
-		if (t[j] == depth) t[j] = 0;
-	    }
-
-	    // -------------------------
-	    // FROM v_trg
-	    for (boost::tie(o_i,e_end) = out_edges(v_trg, g); o_i != e_end; ++o_i)
-	    {
-		EIndex j = edm.get_edge_index(*o_i);
-		if (t[j] == depth) t[j] = 0;
-	    }
-
-	    core[i] = NULL_INDEX;
-	}
-
-	template<class G>
-	template<class EDM>
-	void UnDirectedPolicy<G>::MappingArrays::print(const Len& l,
-						       const char* s, const EDM& edm) const
-	{
-	    const int N = core.size();
-
-	    ::fprintf(stderr, s);
-	    for (int i = 0; i < N; ++i)
-	    {
-		if (core[i] >= 0)
-		    std::cerr << " " << core[i] << edm.get_edge_descriptor(core[i])
-			      << "   ";
-		else
-		    std::cerr << core[i] << "(nil)" << "   ";
-	    }
-
-	    ::fprintf(stderr, "\n");
-	    
-	    ::fprintf(stderr, "T:       ");
-	    for (int i = 0; i < N; ++i) ::fprintf(stderr, "%10d", t[i]);
-	    ::fprintf(stderr, " \t Tlen = %d\n", l.t_len);
-	}
-
-
-	template<class G, class DirTag>
-	struct DirPolicy_ : public DirectedPolicy<G> {};
-
-	template<class G>
-	struct DirPolicy_<G,boost::undirected_tag> : public UnDirectedPolicy<G> {};
-
-	template<class G>
-	struct DirPolicy
-	    : public DirPolicy_<G,typename boost::graph_traits<G>::directed_category> {};
-	
-
-	///////////////////////////////////////////////////////////////////////
-	//		class Shared
-	// --------------------------------------------------------------------
-	//
-	// template parameters:
-	//  Graph
-	//  EDM
-	//    EDescr get_descriptor(EIndex) const;
-	//    EIndex get_index(Descr) const;
-	//
 	template<class G, class D>
-	class Shared
+	void UnDirectedPolicy<G,D>::TArray::make_tarray(VIndex vi_g1, TCount*cnt, int depth)
 	{
-	public:
-	    typedef G Graph;
-	    typedef D EDM;
+	    const G& g = this->graph;
+	    const DM& dm = this->dm;
 
-	    typename DirPolicy<G>::MappingArrays ma;
-	    const G& graph;
-	    const EDM& edm;
-
-
-	    Shared(const G& g, const EDM& edm)
-		: ma(num_edges(g)), graph(g), edm(edm) {}
+	    if (t[vi_g1] == 0) t[vi_g1] = depth; else --cnt->t_len;
 	    
-	    void add_pair(EIndex i, EIndex j,
-			  typename DirPolicy<G>::Len* len, int depth)
-		{ ma.add(graph, i, j, len, depth, edm); }
-	    
-	    void backtrack(EIndex lasti, int depth)
-		{ ma.backtrack(graph, lasti, depth, edm); }
-	};
+	    VDescr v = dm.get_vertex_descriptor(vi_g1);
+
+	    typename boost::graph_traits<G>::out_edge_iterator o_i, o_end;
+	    for (boost::tie(o_i,o_end) = out_edges(v, g); o_i != o_end; ++o_i)
+	    {
+		VIndex vi_adj = dm.get_vertex_index(target(*o_i, g));
+		if (t[vi_adj] == 0)
+		{
+		    t[vi_adj] = depth;
+		    ++cnt->t_len;
+		}
+	    }
+	}
+
+
+	template<class G, class D>
+	void UnDirectedPolicy<G,D>::TArray::backtrack_tarray(VIndex vi_last, int depth)
+	{
+	    if (t[vi_last] == depth) t[vi_last] = 0;
+
+	    VDescr v = this->dm.get_vertex_descriptor(vi_last);
+	    typename boost::graph_traits<G>::out_edge_iterator o_i, o_end;
+	    for (boost::tie(o_i,o_end) = out_edges(v, this->graph); o_i != o_end; ++o_i)
+	    {
+		VIndex vi_adj = this->dm.get_vertex_index(target(*o_i, this->graph));
+		if (t[vi_adj] == depth) t[vi_adj] = 0;
+	    }
+	}
+
+
+	// type selection
+        template<class G, class D, class DirTag>
+        struct DirPolicy_ : public DirectedPolicy<G,D> {};
+
+        template<class G, class D>
+        struct DirPolicy_<G,D,boost::undirected_tag> : public UnDirectedPolicy<G,D> {};
+
+        template<class G, class D>
+        struct DirPolicy
+            : public DirPolicy_<G,D,typename boost::graph_traits<G>::directed_category> {};
+
 
 
 	///////////////////////////////////////////////////////////////////////
-	//		class State
-	// --------------------------------------------------------------------
-	// template parameters:
-	//  SH - Shared class
-	//  VC
-	//    bool operator() (VDescr,VDescr) const;
-	//  EC
-	//    bool operator() (EDescr,EDescr) const;
-	//
-	template<class SH, class VC, class EC, class MP>
+        //              class State
+        // --------------------------------------------------------------------
+	template<class DP, class MP, class VC, class EC>
 	class State
 	{
-	    typedef typename SH::Graph Graph;
-	    typedef typename SH::EDM EDM;
+	    typedef typename DP::Graph Graph;
+	    typedef typename DP::DM DM;
+	    typedef typename DP::TCount TCount;
+	    typedef typename DP::TArray TArray;
+            typedef typename boost::graph_traits<Graph>::vertex_descriptor VDescr;
+            typedef typename boost::graph_traits<Graph>::edge_descriptor EDescr;
 
-	    int depth;
-
+	    unsigned int depth;
 	    struct MPart
 	    {
-		SH* shared;
-		typename DirPolicy<Graph>::Len len;
-		EIndex last;
-		
-		MPart(SH* sh) :shared(sh) {}
-		MPart(const MPart& r, EIndex i, EIndex j, int depth)
-		    :shared(r.shared), len(r.len), last(i)
-		    { shared->add_pair(i, j, &len, depth); }
-		
-		void backtrack(int depth) { shared->backtrack(last, depth); }
-
+		TArray* tarr;
+		TCount  tcnt;
+		VIndex vi_last;
+		MPart(TArray* t, const TCount& cnt = TCount(), VIndex vi = NULL_VINDEX)
+		    :tarr(t), tcnt(cnt), vi_last(vi) {}
 	    } mp1, mp2;
+
+	    EIndexPairs last_mapped_edges;
 
 	    const VC& vc;
 	    const EC& ec;
+	    
+	    bool test_feasibility_and_add(VIndex vi_g1, VIndex vi_g2);
+	    void backtrack();
 	public:
-	    State(SH* sh1, SH* sh2, const VC& vc, const EC& ec)
-		: depth(0),
-		  mp1(sh1),
-		  mp2(sh2),
-		  vc(vc), ec(ec)
-		{ }
+	    class NotFeasibleException {};
 
-	    State(const State& s, EIndex ei1, EIndex ei2)
-		: depth(s.depth + 1),
-		  mp1(s.mp1, ei1, ei2, depth),
-		  mp2(s.mp2, ei2, ei1, depth),
-		  vc(s.vc), ec(s.ec)
+	    State(TArray* tarr1, TArray* tarr2, const VC& vc, const EC& ec)
+		:depth(0),
+		 mp1(tarr1),
+		 mp2(tarr2),
+		 vc(vc), ec(ec)
 		{
 		    //print();
 		}
-
-	    bool is_goal() const { return MP::is_goal(depth,
-						      mp1.shared->ma.size(),
-						      mp2.shared->ma.size()); }
-	    bool is_dead() const
+	    
+	    State(const State& s, VIndex vi_g1, VIndex vi_g2)
+		:depth(s.depth+1),
+		 mp1(s.mp1.tarr, s.mp1.tcnt, vi_g1),
+		 mp2(s.mp2.tarr, s.mp2.tcnt, vi_g2),
+		 vc(s.vc), ec(s.ec)
 		{
-		    typedef typename DirPolicy<Graph>::Len Len;
-		    return
-			MP::op(mp1.shared->ma.size(), mp2.shared->ma.size()) ||
-			Len::template cmp(mp1.len, mp2.len, &MP::op);
+		    if (! test_feasibility_and_add(vi_g1, vi_g2))
+			throw NotFeasibleException();
+		    //print();
 		}
 
-	    bool is_feasible(EIndex ei1, EIndex ei2) const;
-	    void backtrack()
-		{
-		    mp1.backtrack(depth);
-		    mp2.backtrack(depth);
-		    --depth;
-		}
-
-	    IndexIteratorPair pairs() const
-		{
-		    return
-			DirPolicy<Graph>::MappingArrays::pairs(
-			    mp1.shared->ma, mp1.len, mp2.shared->ma, mp2.len);
-		}
-
+	    ~State() { backtrack(); }
+	    
+	    bool is_goal() const;
+	    bool is_dead() const { return TCount::template cmp(mp1.tcnt, mp2.tcnt, &MP::op); }
+	    IndexIteratorPair get_pairs() const
+		{ return TArray::get_pairs(mp1.tarr, mp1.tcnt, mp2.tarr, mp2.tcnt); }
+	    
+	    const IsoMap<Graph, DM>& iso_map1() const { return *mp1.tarr; }
+	    const IsoMap<Graph, DM>& iso_map2() const { return *mp2.tarr; }
 	    void print() const;
 	};
 
 
-	template<class SH, class VC, class EC, class MP>
-	bool State<SH,VC,EC,MP>::is_feasible(EIndex ei_g1, EIndex ei_g2) const
+	template<class DP, class MP, class VC, class EC>
+	bool State<DP,MP,VC,EC>::test_feasibility_and_add(VIndex vi_g1, VIndex vi_g2)
 	{
-	    if (ei_g1 == 2 && ei_g2 == 1)
-		;//BR;
+	    const Graph& g1 = mp1.tarr->graph;
+	    const Graph& g2 = mp1.tarr->graph;
+	    const DM& dm1 = mp1.tarr->dm;
+	    const DM& dm2 = mp2.tarr->dm;
 
-
-	    typedef typename boost::graph_traits<Graph>::vertex_descriptor VDescr;
-	    typedef typename boost::graph_traits<Graph>::edge_descriptor EDescr;
-
-	    const Graph& g1 = mp1.shared->graph;
-	    const Graph& g2 = mp2.shared->graph;
-	    const EDM& edm1 = mp1.shared->edm;
-	    const EDM& edm2 = mp2.shared->edm;
-	    EDescr e_g1 = edm1.get_edge_descriptor(ei_g1);
-	    EDescr e_g2 = edm2.get_edge_descriptor(ei_g2);
-
-	    if (! ec(g1, g2, e_g1, e_g2))
+	    VDescr v_g1 = dm1.get_vertex_descriptor(vi_g1);
+	    VDescr v_g2 = dm2.get_vertex_descriptor(vi_g2);
+	    
+            // =======================================================
+            // test feasibility
+            // =======================================================
+	    
+	    if (! vc(g1, g2, v_g1, v_g2))
 		return false;
 	    
-	    VDescr v_src_g1 = source(e_g1, g1);
-	    VDescr v_trg_g1 = target(e_g1, g1);
-	    VDescr v_src_g2 = source(e_g2, g2);
-	    VDescr v_trg_g2 = target(e_g2, g2);
-
-
-	    if (! DirPolicy<Graph>::vertex_label_compare(v_src_g1, v_trg_g1,
-							 v_src_g2, v_trg_g2,
-							 g1, g2, vc))
+	    int termout1=0, termout2=0, termin1=0, termin2=0, new1=0, new2=0;
+	    
+	    if (! TArray::feasible(v_g1, v_g2, mp1.tarr, mp2.tarr,
+				   &termout1, &termin1, &new1,
+				   0, ec, MP::chk_exit))
 		return false;
 
 
-	    int termout1=0, termout2=0, termin1=0, termin2=0, new1=0, new2=0;	    
-
-	    typedef typename MP::First First;
-	    typedef typename MP::Second Second;
-	    if (! mp1.shared->ma.template feasible<First>(e_g1, v_src_g1, v_trg_g1,
-							  e_g2, v_src_g2, v_trg_g2,
-							  g1, g2, edm1, edm2,
-							  &termout1, &termin1, &new1))
+	    if (! TArray::feasible(v_g2, v_g1, mp2.tarr, mp1.tarr,
+				   &termout2, &termin2, &new2,
+				   &last_mapped_edges, ec, true))
 		return false;
 
-	    if (! mp2.shared->ma.template feasible<Second>(e_g2, v_src_g2, v_trg_g2,
-							   e_g1, v_src_g1, v_trg_g1,
-							   g2, g1, edm2, edm1,
-							   &termout2, &termin2, &new2))
+	    if (! MP::check_term_count(termout1, termout2, termin1, termin2, new1, new2))
 		return false;
 
-	    /*
-	    fprintf(stderr, "%d  %d:  terms: "
-		    "termout1=%d  termout2=%d  termin1=%d  termin2=%d "
-		    "new1=%d  new2=%d\n",
-		    ei_g1, ei_g2,
-		    termout1, termout2, termin1, termin2, new1, new2);*/
-	    return MP::check_term_count(termout1, termout2, termin1, termin2, new1, new2);
+            // =======================================================
+            // add
+            // =======================================================
+	    
+	    mp1.tarr->v_core[vi_g1] = vi_g2;
+	    mp2.tarr->v_core[vi_g2] = vi_g1;
+	    std::for_each(last_mapped_edges.begin(), last_mapped_edges.end(), MM1(mp1.tarr->e_core));
+	    std::for_each(last_mapped_edges.begin(), last_mapped_edges.end(), MM2(mp2.tarr->e_core));
+
+	    mp1.tarr->make_tarray(vi_g1, &mp1.tcnt, depth);
+	    mp2.tarr->make_tarray(vi_g2, &mp2.tcnt, depth);
+
+	    mp1.vi_last = vi_g1;
+	    mp2.vi_last = vi_g2;
+	    
+	    return true;
+	}
+
+
+	template<class DP, class MP, class VC, class EC>
+	void State<DP,MP,VC,EC>::backtrack()
+	{
+	    if (mp1.vi_last == NULL_VINDEX)
+	    {
+		assert (mp2.vi_last == NULL_VINDEX);
+		return;
+	    }
+
+	    assert (mp1.vi_last != NULL_VINDEX);
+	    assert (mp2.vi_last != NULL_VINDEX);
+
+	    mp1.tarr->v_core[mp1.vi_last] = NULL_VINDEX;
+	    mp2.tarr->v_core[mp2.vi_last] = NULL_VINDEX;
+	    std::for_each(last_mapped_edges.begin(), last_mapped_edges.end(), M1(mp1.tarr->e_core));
+	    std::for_each(last_mapped_edges.begin(), last_mapped_edges.end(), M2(mp2.tarr->e_core));
+	    
+	    mp1.tarr->backtrack_tarray(mp1.vi_last, depth);
+	    mp2.tarr->backtrack_tarray(mp2.vi_last, depth);
+	}
+
+
+
+	template<class DP, class MP, class VC, class EC>
+	void State<DP,MP,VC,EC>::print() const
+	{
+            ::fprintf(std::cerr, "*********************************************************\n");
+            ::fprintf(std::cerr, "depth = %d\n", depth);
+	    print(std::cerr, *mp1.tarr, *mp2.tarr, 1);
+	    print(std::cerr, *mp2.tarr, *mp1.tarr, 2);
 	}
 
 	
-	template<class SH, class VC, class EC, class MP>
-	void State<SH,VC,EC,MP>::print() const
+	bool exists_unmapped_edges(const std::vector<EIndex> e_core)
 	{
-	    using namespace std;
-	    
-	    ::fprintf(stderr, "*********************************************************\n");
-	    ::fprintf(stderr, "depth = %d\n", depth);
-
-	    ::fprintf(stderr, "Edges_1:          ");
-	    for (int i=0; i<mp1.shared->ma.size(); ++i)
-		cerr << i << mp1.shared->edm.get_edge_descriptor(i) << "    ";
-	    ::fprintf(stderr, "\n");
-
-	    mp1.shared->ma.print(mp1.len, "Mapped_to_2:     ", mp2.shared->edm);
-	    ::fprintf(stderr, "\n");
+	    typedef std::vector<EIndex>::const_iterator Eci;
+	    return std::find(e_core.begin(), e_core.end(), NULL_EINDEX) != e_core.end();
+	}
 
 
-
-	    ::fprintf(stderr, "Edges_2:          ");	    
-	    for (int i=0; i<mp2.shared->ma.size(); ++i)
-		cerr << i << mp2.shared->edm.get_edge_descriptor(i) << "    ";
-	    ::fprintf(stderr, "\n");
-
-	    mp2.shared->ma.print(mp2.len, "Mapped_to_2:     ", mp1.shared->edm);
-	    ::fprintf(stderr, "\n");
+	template<class DP, class MP, class VC, class EC>
+	bool State<DP,MP,VC,EC>::is_goal() const
+	{ 
+	    if (! mp2.tarr->e_core.empty())
+		return ! exists_unmapped_edges(mp2.tarr->e_core);
+	    else
+		return depth == num_vertices(mp2.tarr->graph);
 	}
 
 	///////////////////////////////////////////////////////////////////////
-	//		function match_all
-	// --------------------------------------------------------------------
-	template<class S>
-	void match_all(const S& s)
+        //              match_all()
+        // --------------------------------------------------------------------
+        //
+
+	template<class S, class R>
+	void match_all(const S& s, R& result)
 	{
 	    if (s.is_goal())
 	    {
-		//std::cerr << "GOAL !!!\n";
+		std::cerr << "IsGoal!\n";
 		//s.print();
+		result(s.iso_map1(), s.iso_map2());
 		return;
 	    }
 
 	    if (s.is_dead())
 	    {
-		//std::cerr << "DEAD !!!\n";
+		std::cerr << "IsDead!\n";
 		return;
 	    }
-	    
-	    //BR;
-	    IndexIteratorPair ip = s.pairs();
-	    if (ip.second.get_v() == NULL_INDEX)
+
+	    IndexIteratorPair ip = s.get_pairs();
+            if (ip.second.get_v() == NULL_VINDEX)
 	    {
-		//std::cerr << "EXIT_1 !!!\n";
-		return;
+		std::cerr << "exit_1\n";
+                return;
 	    }
-	    while (ip.first.get_v() != NULL_INDEX)
-	    {
-		//::fprintf(stderr, " try %d  %d\n", ip.first.get_v(), ip.second.get_v());
-		if (s.is_feasible(ip.first.get_v(), ip.second.get_v()))
+            while (ip.first.get_v() != NULL_VINDEX)
+            {
+		try
 		{
-		    S h(s, ip.first.get_v(), ip.second.get_v());
-		    match_all(h);
-		    h.backtrack();
+                    S h(s, ip.first.get_v(), ip.second.get_v());
+                    match_all(h, result);
 		}
-		ip.first.next();
-	    }
-	    //std::cerr << "EXIT_2 !!!\n";
+		catch (typename S::NotFeasibleException) { /* just continue */ }
+                ip.first.next();
+            }
+
+	    std::cerr << "exit_2\n";
 	}
 
 
 	///////////////////////////////////////////////////////////////////////
-	//		Defaults
-	// --------------------------------------------------------------------
-	//
-	class BadIndex {};
-
+        //              Defaults
+        // --------------------------------------------------------------------
+        //
 	template<class G>
-	class EDMDedault {
-	public:	    
-	    typedef typename boost::graph_traits<G>::edge_descriptor EDescr;
-	    EDMDedault(const G& g);
-	    EDescr get_edge_descriptor(EIndex i) const { return i2d[i]; }
-	    EIndex get_edge_index(EDescr v) const
-		{
-		    EIndex n = i2d.size();
-		    for (EIndex i = 0; i < n; ++i) if (i2d[i] == v) return i;
-		    throw BadIndex();
-		    return NULL_INDEX;
-		}
-
-	private:
-	    std::vector<EDescr> i2d;
-	    
-	};
-	
-
-	template<class G>	
-	EDMDedault<G>::EDMDedault(const G& g)
+	class DMDefault
 	{
-	    i2d.reserve(num_edges(g));
-	    typename boost::graph_traits<G>::edge_iterator i, i_end;
-	    for (boost::tie(i,i_end) = edges(g); i != i_end; ++i)
-		i2d.push_back(*i);
-	}
-
-
-	template<class G>
-	struct VertexDefaultCompatible {
-	    typedef typename boost::graph_traits<G>::vertex_descriptor VDescr;
-	    bool operator() (const G&, const G&, VDescr, VDescr) const { return true; }
+            typedef typename boost::graph_traits<G>::vertex_descriptor VDescr;
+            typedef typename boost::graph_traits<G>::edge_descriptor EDescr;
+	    std::vector<EDescr> i2e;
+	public:
+	    class BadDescriptorException {};
+	    DMDefault(const G& g)
+		{
+		    i2e.reserve(num_edges(g));
+		    typename boost::graph_traits<G>::edge_iterator i, i_end;
+		    for (boost::tie(i,i_end) = edges(g); i != i_end; ++i)
+			i2e.push_back(*i);
+		}
+	    
+	    VDescr get_vertex_descriptor(VIndex i) const { return i;}
+	    VIndex get_vertex_index(VDescr v) const { return v; }
+	    EDescr get_edge_descriptor(EIndex i) const { return i2e.at(i); }
+	    EIndex get_edge_index(EDescr e) const
+		{
+		    EIndex n = i2e.size();
+                    for (EIndex i = 0; i < n; ++i) if (i2e[i] == e) return i;
+                    throw BadDescriptorException();
+                    return NULL_EINDEX;
+		}	    
 	};
 
-	template<class G>
-	struct EdgeDefaultCompatible {
-	    typedef typename boost::graph_traits<G>::edge_descriptor EDescr;
-	    bool operator() (const G&, const G&, EDescr, EDescr) const { return true; }
-	};
+        template<class G>
+        struct VertexDefaultCompatible {
+            typedef typename boost::graph_traits<G>::vertex_descriptor VDescr;
+            bool operator() (const G&, const G&, VDescr, VDescr) const { return true; }
+        };
+
+        template<class G>
+        struct EdgeDefaultCompatible {
+            typedef typename boost::graph_traits<G>::edge_descriptor EDescr;
+            bool operator() (const G&, const G&, EDescr, EDescr) const { return true; }
+        };	
+
 	
+	struct CountIsoResult
+	{
+	    int iso_count;
+	    CountIsoResult() :iso_count(0) {}
+	    template<class IM>
+	    bool operator() (const IM&, const IM&) { ++iso_count; return true; }
+	};
+
+
+	struct PrintIsoResult
+	{
+	    template<class IM>
+	    bool operator() (const IM& m1, const IM& m2)
+		{
+		    std::cout << "--------------------------------------------------------------\n";
+		    print(std::cout, m1, m2, 1);
+		    print(std::cout, m2, m1, 2);
+		    return true;
+		}
+	};
+
     } // end: namespace detail
 
 
     ///////////////////////////////////////////////////////////////////////
-    //		function graph_isomorphism_all
+    //          graph_isomorphism_all()
     // --------------------------------------------------------------------
     //
-    template<class G, class EDM, class VC, class EC>
+    template<class G, class D, class VC, class EC, class Result>
     void graph_isomorphism_all(const G& g1, const G& g2,
-			       const EDM& edm1, const EDM& edm2,
-			       const VC& vc,
-			       const EC& ec)
+                               const D& dm1, const D& dm2,
+                               const VC& vc,
+                               const EC& ec,
+			       Result& result)
     {
-	typedef detail::GGIsomorphismPolicy<G> IsoPolicy;
-	typedef detail::Shared<G,EDM> SH;
-	SH sh1(g1, edm1);
-	SH sh2(g2, edm2);
-
-	detail::State<SH,VC,EC,IsoPolicy> state(&sh1, &sh2, vc, ec);
-	detail::match_all(state);
+        typedef detail::GGIsomorphismPolicy<G> IsoPolicy;
+	typedef detail::DirPolicy<G,D> DirPolicy;
+	
+	typename DirPolicy::TArray tarr1(g1, dm1);
+	typename DirPolicy::TArray tarr2(g2, dm2);
+	detail::State<DirPolicy,IsoPolicy,VC,EC> state(&tarr1, &tarr2, vc, ec);
+	match_all(state, result);
     }
 
+    ///////////////////////////////////////////////////////////////////////
+    //          subgraph_isomorphism_all()
+    // --------------------------------------------------------------------
+    //
+    template<class G, class D, class VC, class EC, class Result>
+    void subgraph_isomorphism_all(const G& g1, const G& g2,
+				  const D& dm1, const D& dm2,
+				  const VC& vc,
+				  const EC& ec,
+				  Result& result)
+    {
+        typedef detail::GSGIsomorphismPolicy<G> IsoPolicy;
+	typedef detail::DirPolicy<G,D> DirPolicy;
+	
+	typename DirPolicy::TArray tarr1(g1, dm1);
+	typename DirPolicy::TArray tarr2(g2, dm2);
+	detail::State<DirPolicy,IsoPolicy,VC,EC> state(&tarr1, &tarr2, vc, ec);
+	match_all(state, result);
+    }
+
+
+
+    template<class G>
+    int graph_isomorphism_count(const G& g1, const G& g2)
+    {
+	detail::CountIsoResult result;
+        graph_isomorphism_all(g1, g2,
+                              detail::DMDefault<G>(g1), detail::DMDefault<G>(g2),
+                              detail::VertexDefaultCompatible<G>(),
+                              detail::EdgeDefaultCompatible<G>(),
+			      result);
+	return result.iso_count;
+    }
 
     template<class G>
     void graph_isomorphism_all(const G& g1, const G& g2)
     {
-	graph_isomorphism_all(g1, g2,
-			      detail::EDMDedault<G>(g1), detail::EDMDedault<G>(g2),
-			      detail::VertexDefaultCompatible<G>(),
-			      detail::EdgeDefaultCompatible<G>());
-    }
-
-    ///////////////////////////////////////////////////////////////////////
-    //		function subgraph_isomorphism_all
-    // --------------------------------------------------------------------
-    //
-    template<class G, class EDM, class VC, class EC>
-    void subgraph_isomorphism_all(const G& g1, const G& g2,
-			       const EDM& edm1, const EDM& edm2,
-			       const VC& vc,
-			       const EC& ec)
-    {
-	typedef detail::GSGIsomorphismPolicy<G> IsoPolicy;
-	typedef detail::Shared<G,EDM> SH;
-	SH sh1(g1, edm1);
-	SH sh2(g2, edm2);
-
-	detail::State<SH,VC,EC,IsoPolicy> state(&sh1, &sh2, vc, ec);
-	detail::match_all(state);
+	detail::PrintIsoResult result;
+        graph_isomorphism_all(g1, g2,
+                              detail::DMDefault<G>(g1), detail::DMDefault<G>(g2),
+                              detail::VertexDefaultCompatible<G>(),
+                              detail::EdgeDefaultCompatible<G>(),
+			      result);
     }
 
 
     template<class G>
     void subgraph_isomorphism_all(const G& g1, const G& g2)
     {
-	subgraph_isomorphism_all(g1, g2,
-			      detail::EDMDedault<G>(g1), detail::EDMDedault<G>(g2),
-			      detail::VertexDefaultCompatible<G>(),
-			      detail::EdgeDefaultCompatible<G>());
+	detail::PrintIsoResult result;
+        subgraph_isomorphism_all(g1, g2,
+				 detail::DMDefault<G>(g1), detail::DMDefault<G>(g2),
+				 detail::VertexDefaultCompatible<G>(),
+				 detail::EdgeDefaultCompatible<G>(),
+				 result);
     }
-}
+    
+}     // end: namespace graph_alg
+
+#endif

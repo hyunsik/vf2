@@ -12,7 +12,7 @@ typedef adjacency_list<vecS,vecS,
 		       //bidirectionalS
 		       undirectedS
 		       > Graph;
-typedef graph_traits<Graph>::vertex_descriptor VDescr;
+typedef typename graph_traits<Graph>::vertex_descriptor VDescr;
 
 
 
@@ -42,7 +42,7 @@ int main()
     add_edge(6, 3, g1);
     add_edge(7, 4, g1);
     add_edge(7, 3, g1);
-    add_edge(8, 3, g1);
+    //add_edge(8, 3, g1);
     add_edge(8, 7, g1);
 
 
@@ -59,9 +59,8 @@ int main()
     add_edge(6, 2, g2);
     add_edge(7, 1, g2);
     add_edge(7, 2, g2);
-    add_edge(8, 2, g2);
-    add_edge(8, 7, g2);
-
+    //add_edge(8, 2, g2);
+    //add_edge(8, 7, g2);
 
     subgraph_isomorphism_all(g1, g2);
 }
